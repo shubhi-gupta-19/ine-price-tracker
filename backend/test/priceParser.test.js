@@ -15,8 +15,17 @@ test("Price Parser: parses real INE store formatted text with zero-width charact
     const inePrice2 = "₹\u200B1\u200B8\u200B,\u200B5\u200B1\u200B2";
     assert.equal(parsePrice(inePrice2), 18512);
 
+    const inePriceSpaced = "₹\u00A0\u200B2\u00A0\u200B,\u00A0\u200B9\u00A0\u200B9\u00A0\u200B6";
+    assert.equal(parsePrice(inePriceSpaced), 2996);
+
     const inePriceFull = "₹\u200B1\u200B8\u200B,\u200B5\u200B1\u200B2/- (incl. of all taxes)";
     assert.equal(parsePrice(inePriceFull), 18512);
+
+    const ineEuroFormat = "₹ 2.996,00";
+    assert.equal(parsePrice(ineEuroFormat), 2996);
+
+    const ineUnicodeFormat = "₹ ２９９６";
+    assert.equal(parsePrice(ineUnicodeFormat), 2996);
 });
 
 test("Price Parser: rejects invalid, negative, NaN, and malformed inputs", () => {

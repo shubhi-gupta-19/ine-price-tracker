@@ -1,6 +1,7 @@
 import { chromium } from "playwright";
 import fs from "fs/promises";
 import path from "path";
+import os from "os";
 import { config } from "../config/env.js";
 import { parsePrice } from "../utils/priceParser.js";
 import { logInfo, logError } from "../utils/logger.js";
@@ -66,66 +67,121 @@ export function determineStock(stockText) {
     return null;
 }
 
-async function ensureVideoDirectory() {
-    const directory = path.resolve("videos");
+async function ensureTempVideoDirectory() {
+    const directory = path.join(os.tmpdir(), "ine-price-tracker-videos");
     await fs.mkdir(directory, { recursive: true });
     return directory;
 }
 
 async function handleInteractiveChallenge(page) {
     try {
-        await page.waitForSelector(".price-block", { timeout: 5000 }).catch(() => { });
+        const priceBlock = page.locator(".price-block").first();
+        await priceBlock.waitFor({ state: "attached", timeout: 8000 }).catch(() => { });
 
+        if (await priceBlock.count() === 0) return;
+
+        // Remove cookie overlays or banners if present
         await page.evaluate(() => {
             const overlay = document.querySelector(".cookie-overlay");
             if (overlay) overlay.remove();
-            const acceptBtn = Array.from(document.querySelectorAll("button")).find(b =>
-                b.innerText.toLowerCase().includes("accept") ||
-                b.innerText.toLowerCase().includes("agree") ||
-                b.innerText.toLowerCase().includes("dismiss")
-            );
-            if (acceptBtn) acceptBtn.click();
+            const btns = Array.from(document.querySelectorAll("button"));
+            const cookieBtn = btns.find(b => /accept|agree|dismiss/i.test(b.innerText || ""));
+            if (cookieBtn) cookieBtn.click();
         }).catch(() => { });
 
-        const priceBlock = page.locator(".price-block").first();
-        if (await priceBlock.count() > 0) {
-            const isIdle = await page.locator(".price-block.price-idle").count() > 0;
-            if (isIdle) {
-                await priceBlock.scrollIntoViewIfNeeded().catch(() => { });
-                const box = await priceBlock.boundingBox();
+        // If price is already revealed, nothing more needed
+        if (await page.locator(".price-block.price-success").count() > 0) {
+            return;
+        }
 
-                // Target the reveal button by text content or class instead of aria-label
-                const revealBtn = page.locator("button, .reveal-btn, [class*='reveal']").filter({ hasText: /reveal|try again/i }).first();
+        // Scroll price block into view and wait for layout to settle
+        await priceBlock.scrollIntoViewIfNeeded().catch(() => { });
+        await page.waitForTimeout(300);
 
-                for (let i = 0; i < 40; i++) {
-                    if (box) {
-                        await page.mouse.move(box.x + 40 + (i % 8) * 12, box.y + 30 + (i % 5) * 6);
-                    }
-                    await page.waitForTimeout(100);
+        // Target reveal or try-again buttons
+        const revealBtn = page.locator("button, [role='button']").filter({ hasText: /reveal|try again/i }).first();
+
+        // Perform mouse wiggle challenge (retry up to 3 times if needed)
+        for (let attempt = 0; attempt < 3; attempt++) {
+            if (await page.locator(".price-block.price-success").count() > 0) {
+                break;
+            }
+
+            const box = await priceBlock.boundingBox();
+            if (box && (await revealBtn.count() > 0)) {
+                // Move to center of price-block to trigger mouseenter
+                await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+
+                // Move across the box with step intervals >= 60ms to satisfy minMoves & minDwellMs
+                for (let i = 0; i < 25; i++) {
+                    const targetX = box.x + 20 + ((i * 23) % Math.max(20, Math.floor(box.width - 40)));
+                    const targetY = box.y + 15 + ((i * 13) % Math.max(15, Math.floor(box.height - 30)));
+                    await page.mouse.move(targetX, targetY);
+                    await page.waitForTimeout(70);
+
                     const disabled = await revealBtn.isDisabled().catch(() => true);
-                    if (!disabled) break;
-                }
-
-                if (await revealBtn.count() > 0) {
-                    await revealBtn.click({ force: true }).catch(() => { });
+                    if (!disabled) {
+                        break;
+                    }
                 }
             }
 
-            await page.locator(".price-block.price-success").first().waitFor({ state: "visible", timeout: 6000 }).catch(() => { });
+            // Click the button once enabled
+            if (await revealBtn.count() > 0 && !(await revealBtn.isDisabled().catch(() => true))) {
+                await revealBtn.click().catch(() => { });
+
+                // Wait for success or transient error
+                try {
+                    await page.locator(".price-block.price-success").first().waitFor({ state: "visible", timeout: 8000 });
+                    return;
+                } catch {
+                    const isError = await page.locator(".price-block.price-error").count() > 0;
+                    if (isError) {
+                        await page.waitForTimeout(500);
+                        continue;
+                    }
+                }
+            }
         }
+
+        // Final wait for success state
+        await page.locator(".price-block.price-success").first().waitFor({ state: "visible", timeout: 4000 }).catch(() => { });
     } catch (e) {
         logInfo("Interactive challenge notice: " + e.message);
     }
 }
+
 export async function scrapeProduct(url, options = {}) {
     let browser;
     try {
-        const isHeaded = options.headed === true || String(options.headed).toLowerCase() === "true";
-        const headless = isHeaded ? false : config.headless;
-        const shouldRecord = isHeaded || config.recordVideo;
-        const videoDirectory = shouldRecord ? await ensureVideoDirectory() : undefined;
+        // Enforce headless mode in server environments without DISPLAY (e.g., Linux container on Render)
+        const isServerWithoutDisplay = process.platform === "linux" && !process.env.DISPLAY;
 
-        browser = await chromium.launch({ headless });
+        let headless = true;
+        if (isServerWithoutDisplay) {
+            headless = true;
+            logInfo("Headless server environment detected (missing X server or $DISPLAY); forcing headless mode.");
+        } else if (process.env.HEADLESS !== undefined) {
+            headless = String(process.env.HEADLESS).toLowerCase() !== "false";
+        } else if (config && typeof config.headless === "boolean") {
+            headless = config.headless;
+        }
+
+        // Only allow headed mode if not on a server environment without DISPLAY
+        if (!isServerWithoutDisplay && (options.headed === true || String(options.headed).toLowerCase() === "true")) {
+            headless = false;
+        }
+
+        // Normal headless production scraping must NEVER create a video file or video directory.
+        // Only an explicit headed=true local run should create a temporary recording.
+        const isHeadedExplicit = options.headed === true || String(options.headed).toLowerCase() === "true";
+        const shouldRecord = !isServerWithoutDisplay && (isHeadedExplicit || options.recordVideo === true);
+        const videoDirectory = shouldRecord ? await ensureTempVideoDirectory() : undefined;
+
+        browser = await chromium.launch({
+            headless,
+            args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        });
 
         const context = await browser.newContext({
             recordVideo: shouldRecord ? { dir: videoDirectory, size: { width: 1280, height: 720 } } : undefined,
@@ -194,7 +250,15 @@ export async function scrapeProduct(url, options = {}) {
         const video = page.video();
         let videoPath = null;
         if (video) {
-            try { videoPath = await video.path(); } catch { videoPath = null; }
+            try { 
+                videoPath = await video.path(); 
+                if (videoPath) {
+                    console.log(`\n🎥 Headed video recorded at: ${videoPath}\n`);
+                    logInfo("Headed video recorded", { videoPath });
+                }
+            } catch { 
+                videoPath = null; 
+            }
         }
 
         return { ...result, videoPath };
