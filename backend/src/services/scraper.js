@@ -74,10 +74,8 @@ async function ensureVideoDirectory() {
 
 async function handleInteractiveChallenge(page) {
     try {
-        // Wait for potential price block to be mounted
         await page.waitForSelector(".price-block", { timeout: 5000 }).catch(() => { });
 
-        // 1. Clear any cookie/interceptor overlays
         await page.evaluate(() => {
             const overlay = document.querySelector(".cookie-overlay");
             if (overlay) overlay.remove();
@@ -97,114 +95,108 @@ async function handleInteractiveChallenge(page) {
                 const box = await priceBlock.boundingBox();
                 const revealBtn = page.locator("button[aria-label='Reveal price']").first();
 
-                // Extended dynamic mouse movement loop with longer fallback timeout
-                let enabled = false;
                 for (let i = 0; i < 40; i++) {
                     if (box) {
                         await page.mouse.move(box.x + 40 + (i % 8) * 12, box.y + 30 + (i % 5) * 6);
                     }
                     await page.waitForTimeout(100);
                     const disabled = await revealBtn.isDisabled().catch(() => true);
-                    if (!disabled) {
-                        enabled = true;
-                        break;
-                    }
+                    if (!disabled) break;
                 }
 
                 if (await revealBtn.count() > 0) {
                     await revealBtn.click({ force: true }).catch(() => { });
                 }
-
-                // Wait for success or price to appear
-                await page.locator(".price-block.price-success").first().waitFor({ state: "visible", timeout: 6000 }).catch(() => { });
             }
-        } catch (e) {
-            logInfo("Interactive challenge notice: " + e.message);
-        }
-    }
 
+            await page.locator(".price-block.price-success").first().waitFor({ state: "visible", timeout: 6000 }).catch(() => { });
+        }
+    } catch (e) {
+        logInfo("Interactive challenge notice: " + e.message);
+    }
+}
 export async function scrapeProduct(url, options = {}) {
-        let browser;
-        try {
-            const isHeaded = options.headed === true || String(options.headed).toLowerCase() === "true";
-            const headless = isHeaded ? false : config.headless;
-            const shouldRecord = isHeaded || config.recordVideo;
-            const videoDirectory = shouldRecord ? await ensureVideoDirectory() : undefined;
+    let browser;
+    try {
+        const isHeaded = options.headed === true || String(options.headed).toLowerCase() === "true";
+        const headless = isHeaded ? false : config.headless;
+        const shouldRecord = isHeaded || config.recordVideo;
+        const videoDirectory = shouldRecord ? await ensureVideoDirectory() : undefined;
 
-            browser = await chromium.launch({ headless });
+        browser = await chromium.launch({ headless });
 
-            const context = await browser.newContext({
-                recordVideo: shouldRecord ? { dir: videoDirectory, size: { width: 1280, height: 720 } } : undefined,
-                viewport: { width: 1280, height: 720 },
-                userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
-            });
+        const context = await browser.newContext({
+            recordVideo: shouldRecord ? { dir: videoDirectory, size: { width: 1280, height: 720 } } : undefined,
+            viewport: { width: 1280, height: 720 },
+            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+        });
 
-            const page = await context.newPage();
-            page.setDefaultTimeout(config.scrapeTimeout || 10000);
-            const startTime = Date.now();
-            logInfo("Opening product page", { url });
+        const page = await context.newPage();
+        page.setDefaultTimeout(config.scrapeTimeout || 10000);
+        const startTime = Date.now();
+        logInfo("Opening product page", { url });
 
-            await page.goto(url, { waitUntil: "domcontentloaded", timeout: config.scrapeTimeout || 10000 });
-            await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {
-                logInfo("networkidle timeout; continuing with DOM inspection");
-            });
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: config.scrapeTimeout || 10000 });
+        await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {
+            logInfo("networkidle timeout; continuing with DOM inspection");
+        });
 
-            // Handle anti-bot / interactive challenges if present
-            await handleInteractiveChallenge(page);
+        // Handle anti-bot / interactive challenges if present
+        await handleInteractiveChallenge(page);
 
-            let productElementFound = false;
-            for (const selector of [...PRICE_SELECTORS, ...TITLE_SELECTORS]) {
-                try {
-                    await page.locator(selector).first().waitFor({ state: "visible", timeout: 2000 });
-                    productElementFound = true;
-                    break;
-                } catch { }
-            }
-
-            if (!productElementFound) {
-                await page.waitForTimeout(1000);
-            }
-
-            const titleResult = await findVisibleText(page, TITLE_SELECTORS);
-            const priceResult = await findVisibleText(page, PRICE_SELECTORS);
-            const stockResult = await findVisibleText(page, STOCK_SELECTORS);
-
-            const structureChanged = !priceResult;
-            if (structureChanged) {
-                const bodyText = await page.locator("body").innerText().catch(() => "");
-                logError("Possible store structure change", { url, bodyPreview: bodyText.slice(0, 500) });
-                throw new Error("PRICE_SELECTOR_NOT_FOUND");
-            }
-
-            const price = parsePrice(priceResult.text);
-            if (price === null) throw new Error("PRICE_COULD_NOT_BE_PARSED");
-
-            const stock = determineStock(stockResult?.text);
-            const responseTime = Date.now() - startTime;
-
-            const result = {
-                success: true,
-                title: titleResult?.text || null,
-                price,
-                inStock: stock,
-                priceSelector: priceResult.selector,
-                stockSelector: stockResult?.selector || null,
-                structureChanged,
-                responseTime,
-                finalUrl: page.url()
-            };
-
-            logInfo("Product scraped successfully", result);
-            await context.close();
-
-            const video = page.video();
-            let videoPath = null;
-            if (video) {
-                try { videoPath = await video.path(); } catch { videoPath = null; }
-            }
-
-            return { ...result, videoPath };
-        } finally {
-            if (browser) await browser.close();
+        let productElementFound = false;
+        for (const selector of [...PRICE_SELECTORS, ...TITLE_SELECTORS]) {
+            try {
+                await page.locator(selector).first().waitFor({ state: "visible", timeout: 2000 });
+                productElementFound = true;
+                break;
+            } catch { }
         }
+
+        if (!productElementFound) {
+            await page.waitForTimeout(1000);
+        }
+
+        const titleResult = await findVisibleText(page, TITLE_SELECTORS);
+        const priceResult = await findVisibleText(page, PRICE_SELECTORS);
+        const stockResult = await findVisibleText(page, STOCK_SELECTORS);
+
+        const structureChanged = !priceResult;
+        if (structureChanged) {
+            const bodyText = await page.locator("body").innerText().catch(() => "");
+            logError("Possible store structure change", { url, bodyPreview: bodyText.slice(0, 500) });
+            throw new Error("PRICE_SELECTOR_NOT_FOUND");
+        }
+
+        const price = parsePrice(priceResult.text);
+        if (price === null) throw new Error("PRICE_COULD_NOT_BE_PARSED");
+
+        const stock = determineStock(stockResult?.text);
+        const responseTime = Date.now() - startTime;
+
+        const result = {
+            success: true,
+            title: titleResult?.text || null,
+            price,
+            inStock: stock,
+            priceSelector: priceResult.selector,
+            stockSelector: stockResult?.selector || null,
+            structureChanged,
+            responseTime,
+            finalUrl: page.url()
+        };
+
+        logInfo("Product scraped successfully", result);
+        await context.close();
+
+        const video = page.video();
+        let videoPath = null;
+        if (video) {
+            try { videoPath = await video.path(); } catch { videoPath = null; }
+        }
+
+        return { ...result, videoPath };
+    } finally {
+        if (browser) await browser.close();
     }
+}
