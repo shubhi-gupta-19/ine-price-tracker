@@ -93,7 +93,9 @@ async function handleInteractiveChallenge(page) {
             if (isIdle) {
                 await priceBlock.scrollIntoViewIfNeeded().catch(() => { });
                 const box = await priceBlock.boundingBox();
-                const revealBtn = page.locator("button[aria-label='Reveal price']").first();
+
+                // Target the reveal button by text content or class instead of aria-label
+                const revealBtn = page.locator("button, .reveal-btn, [class*='reveal']").filter({ hasText: /reveal|try again/i }).first();
 
                 for (let i = 0; i < 40; i++) {
                     if (box) {
