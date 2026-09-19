@@ -1,0 +1,23 @@
+{
+  "name": "product-price-tracker-backend",
+  "version": "1.0.0",
+  "description": "Product Price Tracker backend using Express, Supabase and Playwright",
+  "type": "module",
+  "scripts": {
+    "build": "npx playwright install chromium --with-deps",
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "test": "node --import ./test/setup.js --test \"test/*.test.js\"",
+    "test:live": "node scratch/smoke_test.js"
+  },
+  "dependencies": {
+    "@sendgrid/mail": "^8.1.5",
+    "@supabase/supabase-js": "^2.57.4",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "morgan": "^1.10.0",
+    "playwright": "^1.55.0"
+  }
+}
