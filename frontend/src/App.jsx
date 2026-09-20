@@ -1,3 +1,7 @@
+/**
+ * INE Price Tracker Frontend
+ * Cleaned production view - Headed video scraping UI removed
+ */
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import {
