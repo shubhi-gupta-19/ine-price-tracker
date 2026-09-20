@@ -151,8 +151,55 @@ async function handleInteractiveChallenge(page) {
     }
 }
 
+export const CHROMIUM_ARGS = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu"
+];
+
+export async function launchBrowserWithRetry({
+    headless = true,
+    args = CHROMIUM_ARGS,
+    maxAttempts = 3,
+    initialBackoffMs = 1000,
+    launcher = chromium
+} = {}) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            logInfo(`Launching Chromium browser (attempt ${attempt}/${maxAttempts})...`, { headless });
+            const browser = await launcher.launch({
+                headless,
+                args
+            });
+            return browser;
+        } catch (error) {
+            lastError = error;
+            logError(`Chromium launch attempt ${attempt}/${maxAttempts} failed: ${error.message}`, {
+                error: error.message,
+                stack: error.stack,
+                attempt
+            });
+
+            if (attempt < maxAttempts) {
+                const backoffMs = initialBackoffMs * Math.pow(2, attempt - 1);
+                logInfo(`Waiting ${backoffMs}ms before retrying Chromium launch...`);
+                await new Promise(resolve => setTimeout(resolve, backoffMs));
+            }
+        }
+    }
+
+    const launchError = new Error(`Chromium launch failed after ${maxAttempts} attempts: ${lastError?.message || "Unknown error"}`);
+    launchError.name = "BrowserLaunchError";
+    launchError.code = "browser_launch_failure";
+    throw launchError;
+}
+
 export async function scrapeProduct(url, options = {}) {
-    let browser;
+    let browser = null;
+    let context = null;
+    let page = null;
     try {
         // Enforce headless mode in server environments without DISPLAY (e.g., Linux container on Render)
         const isServerWithoutDisplay = process.platform === "linux" && !process.env.DISPLAY;
@@ -178,26 +225,35 @@ export async function scrapeProduct(url, options = {}) {
         const shouldRecord = !isServerWithoutDisplay && (isHeadedExplicit || options.recordVideo === true);
         const videoDirectory = shouldRecord ? await ensureTempVideoDirectory() : undefined;
 
-        browser = await chromium.launch({
+        browser = await launchBrowserWithRetry({
             headless,
-            args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+            args: CHROMIUM_ARGS,
+            maxAttempts: options.maxLaunchAttempts || 3,
+            initialBackoffMs: options.launchRetryDelayMs || 1000
         });
 
-        const context = await browser.newContext({
+        context = await browser.newContext({
             recordVideo: shouldRecord ? { dir: videoDirectory, size: { width: 1280, height: 720 } } : undefined,
             viewport: { width: 1280, height: 720 },
             userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
         });
 
-        const page = await context.newPage();
+        page = await context.newPage();
         page.setDefaultTimeout(config.scrapeTimeout || 10000);
         const startTime = Date.now();
         logInfo("Opening product page", { url });
 
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: config.scrapeTimeout || 10000 });
-        await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {
-            logInfo("networkidle timeout; continuing with DOM inspection");
-        });
+        try {
+            await page.goto(url, { waitUntil: "domcontentloaded", timeout: config.scrapeTimeout || 10000 });
+            await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {
+                logInfo("networkidle timeout; continuing with DOM inspection");
+            });
+        } catch (navErr) {
+            const navError = new Error(`Navigation failed for ${url}: ${navErr.message}`);
+            navError.name = "NavigationError";
+            navError.code = "navigation_failure";
+            throw navError;
+        }
 
         // Handle anti-bot / interactive challenges if present
         await handleInteractiveChallenge(page);
@@ -223,11 +279,17 @@ export async function scrapeProduct(url, options = {}) {
         if (structureChanged) {
             const bodyText = await page.locator("body").innerText().catch(() => "");
             logError("Possible store structure change", { url, bodyPreview: bodyText.slice(0, 500) });
-            throw new Error("PRICE_SELECTOR_NOT_FOUND");
+            const structError = new Error("PRICE_SELECTOR_NOT_FOUND");
+            structError.code = "selector_missing";
+            throw structError;
         }
 
         const price = parsePrice(priceResult.text);
-        if (price === null) throw new Error("PRICE_COULD_NOT_BE_PARSED");
+        if (price === null) {
+            const parseError = new Error("PRICE_COULD_NOT_BE_PARSED");
+            parseError.code = "price_parse_failure";
+            throw parseError;
+        }
 
         const stock = determineStock(stockResult?.text);
         const responseTime = Date.now() - startTime;
@@ -245,10 +307,14 @@ export async function scrapeProduct(url, options = {}) {
         };
 
         logInfo("Product scraped successfully", result);
-        await context.close();
 
-        const video = page.video();
         let videoPath = null;
+        const video = page.video();
+        if (context) {
+            await context.close().catch(() => {});
+            context = null;
+        }
+
         if (video) {
             try { 
                 videoPath = await video.path(); 
@@ -263,6 +329,11 @@ export async function scrapeProduct(url, options = {}) {
 
         return { ...result, videoPath };
     } finally {
-        if (browser) await browser.close();
+        if (context) {
+            try { await context.close(); } catch { }
+        }
+        if (browser) {
+            try { await browser.close(); } catch { }
+        }
     }
 }

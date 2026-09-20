@@ -671,9 +671,15 @@ export default function App() {
                             {l.in_stock === false && "Out of Stock"}
                             {l.in_stock === null && "-"}
                           </td>
-                          <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{l.selector_used || "-"}</td>
-                          <td style={{ color: l.error_message ? "var(--danger)" : "var(--text-muted)", fontSize: "0.85rem" }}>
-                            {l.error_message || (l.structure_changed ? "Structure changed" : "OK")}
+                          <td style={{ fontSize: "0.85rem" }}>
+                            {l.error_type && l.error_type !== "unknown" && (
+                              <span className="badge badge-secondary" style={{ marginRight: "0.4rem", fontSize: "0.75rem", textTransform: "none" }}>
+                                {l.error_type}
+                              </span>
+                            )}
+                            <span style={{ color: l.error_message ? "var(--danger)" : "var(--text-muted)" }}>
+                              {l.error_message || (l.structure_changed ? "Structure changed" : "OK")}
+                            </span>
                           </td>
                         </tr>
                       ))}
