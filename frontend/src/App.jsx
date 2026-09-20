@@ -111,13 +111,11 @@ export default function App() {
     }
   };
 
-  const handleScrapeProduct = async (id, headed = false) => {
+  const handleScrapeProduct = async (id) => {
     setScrapingId(id);
-    showNotice(headed ? "Starting headed scraper with video..." : "Triggering on-demand scrape...", "info");
+    showNotice("Triggering on-demand scrape...", "info");
     try {
-      const res = await axios.post(`${API_URL}/api/scrape/${id}`, null, {
-        params: headed ? { headed: true } : {}
-      });
+      const res = await axios.post(`${API_URL}/api/scrape/${id}`);
       if (res.data?.success) {
         showNotice(`Scraped successfully! Price: ₹${res.data.result?.price} (${res.data.result?.responseTime}ms)`, "success");
       } else {
@@ -323,7 +321,7 @@ export default function App() {
                       <button
                         className="btn btn-primary btn-sm"
                         disabled={scrapingId === p.id}
-                        onClick={() => handleScrapeProduct(p.id, false)}
+                        onClick={() => handleScrapeProduct(p.id)}
                       >
                         {scrapingId === p.id ? "Scraping..." : "⚡ Scrape"}
                       </button>
@@ -467,17 +465,9 @@ export default function App() {
                       <button
                         className="btn btn-primary btn-sm"
                         disabled={scrapingId === p.id}
-                        onClick={() => handleScrapeProduct(p.id, false)}
+                        onClick={() => handleScrapeProduct(p.id)}
                       >
                         {scrapingId === p.id ? "Scraping..." : "⚡ Scrape"}
-                      </button>
-                      <button
-                        className="btn btn-outline btn-sm"
-                        title="Run Headed Scraper (Records Video Proof)"
-                        disabled={scrapingId === p.id}
-                        onClick={() => handleScrapeProduct(p.id, true)}
-                      >
-                        🎥
                       </button>
                     </div>
                   </div>
@@ -521,16 +511,9 @@ export default function App() {
                   <button
                     className="btn btn-primary"
                     disabled={scrapingId === productDetail.id}
-                    onClick={() => handleScrapeProduct(productDetail.id, false)}
+                    onClick={() => handleScrapeProduct(productDetail.id)}
                   >
                     {scrapingId === productDetail.id ? "Scraping..." : "⚡ Scrape Now"}
-                  </button>
-                  <button
-                    className="btn btn-outline"
-                    disabled={scrapingId === productDetail.id}
-                    onClick={() => handleScrapeProduct(productDetail.id, true)}
-                  >
-                    🎥 Headed Scrape (Video)
                   </button>
                 </div>
               </div>
