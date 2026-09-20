@@ -180,13 +180,12 @@ Executes all 11 unit tests covering price parsing, stock extraction, retry engin
 
 ## 🎥 Headed Run & Video Recording
 
-To run a scrape with a visible browser and record video proof:
-1. In the UI: Click the **🎥** button on any tracked product card or on the Product Details screen.
-2. Via API:
+To run a scrape with a visible browser and record video proof locally for testing/submissions:
+1. Via API:
    ```bash
    curl -X POST http://localhost:5000/api/scrape/<PRODUCT_ID>?headed=true
    ```
-3. Recorded WebM video files are automatically saved to `backend/videos/`.
+2. Temporary video recordings are saved outside the repository in the OS temporary directory, and the saved file path is printed in the server logs upon completion.
 
 ---
 
